@@ -8,8 +8,8 @@ body {
   width: 100%;
   min-height: 100vh;
   font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
-  background: #0f172a;
-  color: #e2e8f0;
+  background: #f9fafb;
+  color: #111827;
 }
 
 #root {
