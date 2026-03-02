@@ -17,7 +17,8 @@ router.get('/', async (req, res) => {
     }
     const filterBranch = req.user.role === 'admin' ? (branchId ? [parseInt(branchId, 10)] : null) : [req.user.branch_id];
     const table = 'v_stock_with_days_no_sale';
-    const select = 's.branch_id, s.product_id, s.quantity, s.last_sale_at, s.updated_at, s.days_since_last_sale, s.is_dead_stock';
+    const select =
+      's.branch_id, s.product_id, s.quantity, s.last_sale_at, s.updated_at, s.days_since_last_sale, s.avg_monthly_3m, s.is_dead_stock';
 
     let sql = `SELECT ${select}, p.sku, p.name AS product_name, p.category, b.name AS branch_name, b.city
                FROM ${table} s

@@ -104,7 +104,7 @@ router.post('/', express.json(), async (req, res) => {
 // - la ACCEPTARE se actualizează stocurile (scade la sursă, crește la destinație)
 router.patch('/:id/status', express.json(), async (req, res) => {
   try {
-    const { status } = req.body;
+    const { status, quantity } = req.body;
     const allowed = ['sent', 'accepted', 'rejected'];
     if (!allowed.includes(status)) {
       return res.status(400).json({ error: 'Status invalid' });
@@ -125,16 +125,26 @@ router.patch('/:id/status', express.json(), async (req, res) => {
       }
     }
 
+    // Actualizam statusul; pentru accepted putem ajusta si cantitatea
+    let effectiveQty = t.quantity;
+    if (status === 'accepted' && quantity != null) {
+      const q = parseInt(quantity, 10);
+      if (!Number.isFinite(q) || q < 1 || q > t.quantity) {
+        return res.status(400).json({ error: `Cantitate invalidă pentru acceptare (1 - ${t.quantity}).` });
+      }
+      effectiveQty = q;
+    }
+
     run(
-      'UPDATE transfers SET status = $1, updated_at = datetime(\'now\') WHERE id = $2',
-      [status, req.params.id]
+      'UPDATE transfers SET status = $1, quantity = $2, updated_at = datetime(\'now\') WHERE id = $3',
+      [status, effectiveQty, req.params.id]
     );
     if (status === 'accepted') {
       const stockFrom = query(
         'SELECT quantity FROM stock WHERE branch_id = $1 AND product_id = $2',
         [t.from_branch_id, t.product_id]
       );
-      if (!stockFrom.rows[0] || stockFrom.rows[0].quantity < t.quantity) {
+      if (!stockFrom.rows[0] || stockFrom.rows[0].quantity < effectiveQty) {
         run(
           'UPDATE transfers SET status = $1, updated_at = datetime(\'now\') WHERE id = $2',
           ['sent', req.params.id]
@@ -146,20 +156,20 @@ router.patch('/:id/status', express.json(), async (req, res) => {
         [t.to_branch_id]
       );
       const toCurrent = Number(toBranchTotal.rows[0]?.total ?? 0);
-      if (toCurrent + t.quantity > MAX_STOCK_PER_BRANCH) {
+      if (toCurrent + effectiveQty > MAX_STOCK_PER_BRANCH) {
         return res.status(400).json({
           error: `Magazinul nu are capacitate. Stoc actual: ${toCurrent}, maxim: ${MAX_STOCK_PER_BRANCH} produse.`,
         });
       }
       run(
         `UPDATE stock SET quantity = quantity - $1, updated_at = datetime('now') WHERE branch_id = $2 AND product_id = $3`,
-        [t.quantity, t.from_branch_id, t.product_id]
+        [effectiveQty, t.from_branch_id, t.product_id]
       );
       run(
         `INSERT INTO stock (branch_id, product_id, quantity, updated_at)
          VALUES ($1, $2, $3, datetime('now'))
          ON CONFLICT (branch_id, product_id) DO UPDATE SET quantity = stock.quantity + $3, updated_at = datetime('now')`,
-        [t.to_branch_id, t.product_id, t.quantity]
+        [t.to_branch_id, t.product_id, effectiveQty]
       );
     }
     const r = await query('SELECT * FROM transfers WHERE id = $1', [req.params.id]);
@@ -173,7 +183,7 @@ router.patch('/:id/status', express.json(), async (req, res) => {
 router.get('/suggestions', async (req, res) => {
   try {
     const r = await query(
-      `SELECT v.branch_id, v.product_id, v.quantity AS available, v.days_since_last_sale, v.is_dead_stock,
+      `SELECT v.branch_id, v.product_id, v.quantity AS available, v.days_since_last_sale, v.is_dead_stock, v.avg_monthly_3m,
               b.name AS branch_name, p.sku, p.name AS product_name
        FROM v_stock_with_days_no_sale v
        JOIN branches b ON b.id = v.branch_id

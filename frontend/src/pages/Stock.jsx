@@ -17,8 +17,24 @@ export default function Stock() {
   const [transferSuggestions, setTransferSuggestions] = useState([]);
   const [modalDest, setModalDest] = useState('');
   const [modalMax, setModalMax] = useState(null);
+  const [autoPlan, setAutoPlan] = useState([]);
+  const [planning, setPlanning] = useState(false);
+  const [sendingPlan, setSendingPlan] = useState(false);
 
   const isAdmin = user?.role === 'admin';
+
+  // Limita maximă pentru transfer, ținând cont de stocul magazinului și de media vânzărilor pe ultimele 3 luni
+  const transferLimit = (() => {
+    if (!modal || modal.type !== 'transfer') return null;
+    const stockCap = typeof modal.row?.quantity === 'number' ? modal.row.quantity : null;
+    if (stockCap == null) {
+      return modalMax != null && modalMax > 0 ? modalMax : null;
+    }
+    if (modalMax != null && modalMax > 0) {
+      return Math.min(stockCap, modalMax);
+    }
+    return stockCap;
+  })();
 
   useEffect(() => {
     branchesApi.list().then(setBranches).catch(console.error);
@@ -72,6 +88,12 @@ export default function Stock() {
       setError('Introduceți o cantitate validă (min. 1).');
       return;
     }
+    if (modal.type === 'transfer' && transferLimit != null && qty > transferLimit) {
+      setError(
+        `Nu puteți propune mai mult de ${transferLimit} bucăți (limită dată de stocul magazinului și de vânzările din ultimele 3 luni).`
+      );
+      return;
+    }
     if (modal.type === 'transfer' && modalMax != null && modalMax > 0 && qty > modalMax) {
       setError(`Nu puteți propune mai mult de ${modalMax} bucăți (media vânzărilor din ultima lună în magazinul destinație).`);
       return;
@@ -123,6 +145,107 @@ export default function Stock() {
     }
   };
 
+  const generateAutoPlan = async () => {
+    try {
+      setError('');
+      setPlanning(true);
+      const srcBranchId = isAdmin
+        ? branchFilter
+          ? parseInt(branchFilter, 10)
+          : user?.branch_id
+        : user?.branch_id;
+      const rows = stock.filter(
+        (s) => s.is_dead_stock && (!srcBranchId || s.branch_id === srcBranchId)
+      );
+      const plan = [];
+      for (const s of rows) {
+        const srcAvg = Number(s.avg_monthly_3m ?? 0);
+        const qtyAvail = Number(s.quantity ?? 0);
+        const maxOut = Math.max(0, qtyAvail - srcAvg);
+        if (maxOut < 1) continue;
+
+        const sug = transferSuggestions.find(
+          (x) => x.from_branch_id === s.branch_id && x.product_id === s.product_id
+        );
+        if (!sug || !sug.suggested_destinations?.length) continue;
+
+        const dests = sug.suggested_destinations
+          .filter((d) => d.branch_id !== s.branch_id && d.total_sold > 0)
+          .sort((a, b) => b.total_sold - a.total_sold)
+          .slice(0, 2);
+        const totalNeed = dests.reduce((sum, d) => sum + d.total_sold, 0);
+        if (dests.length === 0 || totalNeed <= 0) continue;
+
+        let remaining = maxOut;
+        dests.forEach((d, idx) => {
+          if (remaining <= 0) return;
+          const proportional = Math.floor((maxOut * d.total_sold) / totalNeed);
+          let send = proportional;
+          if (idx === dests.length - 1) {
+            send = remaining;
+          } else if (send < 1) {
+            send = 1;
+          }
+          if (send > remaining) send = remaining;
+          if (send < 1) return;
+          remaining -= send;
+
+          const toBranch = branches.find((b) => b.id === d.branch_id);
+          plan.push({
+            from_branch_id: s.branch_id,
+            to_branch_id: d.branch_id,
+            product_id: s.product_id,
+            quantity: send,
+            product_name: s.product_name,
+            sku: s.sku,
+            from_branch_name: s.branch_name,
+            to_branch_name: toBranch ? toBranch.name : `#${d.branch_id}`,
+          });
+        });
+      }
+
+      setAutoPlan(plan);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setPlanning(false);
+    }
+  };
+
+  const updatePlanQuantity = (index, value) => {
+    const qty = parseInt(value, 10);
+    if (!Number.isFinite(qty) || qty < 1) return;
+    setAutoPlan((prev) =>
+      prev.map((row, i) => (i === index ? { ...row, quantity: qty } : row))
+    );
+  };
+
+  const removePlanRow = (index) => {
+    setAutoPlan((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const sendAutoPlan = async () => {
+    try {
+      setError('');
+      setSendingPlan(true);
+      for (const p of autoPlan) {
+        await transfersApi.create({
+          from_branch_id: p.from_branch_id,
+          to_branch_id: p.to_branch_id,
+          product_id: p.product_id,
+          quantity: p.quantity,
+          notes: 'Cerere automată generată din stoc mort',
+        });
+      }
+      setAutoPlan([]);
+      await loadStock();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setSendingPlan(false);
+    }
+  };
+
   return (
     <>
       <h1>Stoc actual</h1>
@@ -151,6 +274,14 @@ export default function Stock() {
           />
           Doar stoc mort (≥100 zile fără vânzare)
         </label>
+        <button
+          type="button"
+          className="btn btn-primary"
+          onClick={generateAutoPlan}
+          disabled={planning || stock.length === 0}
+        >
+          {planning ? 'Se generează planul...' : 'Generează plan transfer stoc mort'}
+        </button>
       </div>
       <div className="card">
         {loading ? (
@@ -278,9 +409,10 @@ export default function Stock() {
               placeholder="Ex: 5"
               autoFocus
             />
-            {modal.type === 'transfer' && modalMax != null && modalMax > 0 && (
+            {modal.type === 'transfer' && transferLimit != null && (
               <p className="sub" style={{ marginTop: '-0.25rem' }}>
-                Puteți propune maxim <strong>{modalMax}</strong> bucăți (media vânzărilor în ultima lună în magazinul selectat).
+                Puteți propune maxim <strong>{transferLimit}</strong> bucăți (limitat de stocul magazinului sursă și de
+                media vânzărilor în ultimele 3 luni în magazinul selectat).
               </p>
             )}
             <div className="stock-modal-actions">
@@ -289,6 +421,85 @@ export default function Stock() {
               </button>
               <button type="button" className="btn btn-primary" onClick={handleModalConfirm} disabled={modalSubmitting}>
                 {modalSubmitting ? 'Se procesează...' : 'Confirm'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {autoPlan.length > 0 && (
+        <div className="stock-modal-overlay" onClick={() => !sendingPlan && setAutoPlan([])}>
+          <div className="stock-modal stock-modal-wide" onClick={(e) => e.stopPropagation()}>
+            <h3>Plan transfer stoc mort</h3>
+            <p className="sub">
+              Verifică și, dacă e nevoie, modifică cantitățile pentru fiecare propunere de transfer, apoi trimite
+              cererile către magazine.
+            </p>
+            <div className="table-wrap" style={{ maxHeight: '60vh', overflowY: 'auto', marginBottom: '1rem' }}>
+              <table>
+                <thead>
+                  <tr>
+                    <th>Din</th>
+                    <th>În</th>
+                    <th>Produs</th>
+                    <th>Cantitate</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {autoPlan.map((row, idx) => (
+                    <tr key={`${row.from_branch_id}-${row.to_branch_id}-${row.product_id}-${idx}`}>
+                      <td>{row.from_branch_name}</td>
+                      <td>{row.to_branch_name}</td>
+                      <td>
+                        {row.product_name} ({row.sku})
+                      </td>
+                      <td>
+                        <input
+                          type="number"
+                          min="1"
+                          value={row.quantity}
+                          onChange={(e) => updatePlanQuantity(idx, e.target.value)}
+                          style={{ width: '80px' }}
+                          disabled={sendingPlan}
+                        />
+                      </td>
+                      <td>
+                        <button
+                          type="button"
+                          className="btn btn-secondary"
+                          onClick={() => removePlanRow(idx)}
+                          disabled={sendingPlan}
+                        >
+                          Șterge
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                  {autoPlan.length === 0 && (
+                    <tr>
+                      <td colSpan={5}>Niciun transfer în plan.</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+            <div className="stock-modal-actions">
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => setAutoPlan([])}
+                disabled={sendingPlan}
+              >
+                Închide
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={sendAutoPlan}
+                disabled={sendingPlan || autoPlan.length === 0}
+              >
+                {sendingPlan ? 'Se trimit cererile...' : 'Trimite cererile de transfer'}
               </button>
             </div>
           </div>

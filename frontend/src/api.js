@@ -55,6 +55,6 @@ export const salesApi = {
 export const transfersApi = {
   list: () => api('/transfers'),
   create: (body) => api('/transfers', { method: 'POST', body: JSON.stringify(body) }),
-  updateStatus: (id, status) => api(`/transfers/${id}/status`, { method: 'PATCH', body: JSON.stringify({ status }) }),
+  updateStatus: (id, body) => api(`/transfers/${id}/status`, { method: 'PATCH', body: JSON.stringify(body) }),
   suggestions: () => api('/transfers/suggestions'),
 };

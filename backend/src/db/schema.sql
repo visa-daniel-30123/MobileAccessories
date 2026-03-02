@@ -101,7 +101,7 @@ LEFT JOIN (
   SELECT
     branch_id,
     product_id,
-    (SUM(quantity) / 3.0) AS avg_monthly_3m
+    CAST(SUM(quantity) / 3.0 AS INTEGER) AS avg_monthly_3m
   FROM sales
   WHERE sold_at >= date('now','-90 days')
   GROUP BY branch_id, product_id

@@ -19,6 +19,12 @@
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
 }
 
+.stock-modal-wide {
+  max-width: 960px;
+  max-height: 80vh;
+  overflow: hidden;
+}
+
 .stock-modal h3 {
   margin: 0 0 1rem 0;
   font-size: 1.1rem;

@@ -74,9 +74,9 @@ export default function Transfers() {
     }
   };
 
-  const updateStatus = async (id, status) => {
+  const updateStatus = async (id, body) => {
     try {
-      await transfersApi.updateStatus(id, status);
+      await transfersApi.updateStatus(id, body);
       setTransfers(await transfersApi.list());
     } catch (err) {
       setError(err.message);
@@ -89,6 +89,18 @@ export default function Transfers() {
 
   // poate aproba doar magazinul destinație (to_branch) sau admin
   const canApprove = (t) => isAdmin || t.to_branch_id === myBranchId;
+
+  const handleAccept = async (t) => {
+    const max = t.quantity;
+    const input = window.prompt(`Introduceți numărul de bucăți de acceptat (max ${max})`, String(max));
+    if (input == null) return; // utilizatorul a apăsat Cancel
+    const qty = parseInt(input, 10);
+    if (!Number.isFinite(qty) || qty < 1 || qty > max) {
+      setError(`Cantitate invalidă. Trebuie să fie între 1 și ${max}.`);
+      return;
+    }
+    await updateStatus(t.id, { status: 'accepted', quantity: qty });
+  };
 
   return (
     <>
@@ -125,14 +137,14 @@ export default function Transfers() {
                             type="button"
                             className="btn btn-primary"
                             style={{ marginRight: '0.25rem' }}
-                            onClick={() => updateStatus(t.id, 'accepted')}
+                            onClick={() => handleAccept(t)}
                           >
                             Accept
                           </button>
                           <button
                             type="button"
                             className="btn btn-secondary"
-                            onClick={() => updateStatus(t.id, 'rejected')}
+                            onClick={() => updateStatus(t.id, { status: 'rejected' })}
                           >
                             Refuz
                           </button>
@@ -306,14 +318,14 @@ export default function Transfers() {
                           type="button"
                           className="btn btn-primary"
                           style={{ marginRight: '0.25rem' }}
-                          onClick={() => updateStatus(t.id, 'accepted')}
+                          onClick={() => handleAccept(t)}
                         >
                           Accept
                         </button>
                         <button
                           type="button"
                           className="btn btn-secondary"
-                          onClick={() => updateStatus(t.id, 'rejected')}
+                          onClick={() => updateStatus(t.id, { status: 'rejected' })}
                         >
                           Refuz
                         </button>
